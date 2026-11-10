@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#f4f1ea">
+<title>TreePlanter</title>
+<style>
+  :root {
+    --bg: #f4f1ea; --card: #ffffff; --ink: #14140f; --muted: #6b6a62; --line: #dcd7cc;
+    --go: #1f7a3a; --go-bg: #dff1e3; --warn: #a15c00; --warn-bg: #fdecc8;
+    --bad: #b3261e; --bad-bg: #fbe0dd; --info: #1d4f91; --info-bg: #dde8f7;
+    --accent: #2f5d34;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg); color: var(--ink);
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+    font-variant-numeric: tabular-nums;
+  }
+  button { font: inherit; }
+  .app { display: flex; flex-direction: column; min-height: 100%; max-width: 560px; margin: 0 auto; }
+
+  /* top bar */
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 16px 8px; }
+  header h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; flex: 1; }
+  .conn { font-size: 13px; font-weight: 600; padding: 5px 10px; border-radius: 999px; background: var(--line); color: var(--muted); }
+  .conn.ok { background: var(--go-bg); color: var(--go); }
+  .conn.busy { background: var(--warn-bg); color: var(--warn); }
+  .btn { border: 0; border-radius: 12px; padding: 12px 16px; font-weight: 700; font-size: 16px; background: var(--accent); color: #fff; }
+  .btn.small { padding: 8px 12px; font-size: 14px; border-radius: 10px; }
+  .btn.ghost { background: transparent; color: var(--accent); border: 2px solid var(--accent); }
+  .btn.danger { background: var(--bad); }
+  .btn:disabled { opacity: .4; }
+
+  main { flex: 1; padding: 0 16px 96px; }
+  .view { display: none; }
+  .view.on { display: block; }
+  .card { background: var(--card); border-radius: 18px; padding: 16px; margin: 10px 0; box-shadow: 0 1px 0 var(--line); }
+
+  /* plant view */
+  .gps { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 15px; color: var(--muted); }
+  .badge { font-weight: 800; font-size: 15px; padding: 4px 10px; border-radius: 8px; letter-spacing: .02em; }
+  .b-fix { background: var(--go-bg); color: var(--go); }
+  .b-float { background: var(--warn-bg); color: var(--warn); }
+  .b-none { background: var(--bad-bg); color: var(--bad); }
+  .b-sim { background: var(--info-bg); color: var(--info); }
+  .rowname { font-size: 26px; font-weight: 800; margin: 6px 0 2px; line-height: 1.15; }
+  .rowsub { font-size: 15px; color: var(--muted); }
+  .state { font-size: 22px; font-weight: 900; text-align: center; padding: 14px; border-radius: 14px; margin: 10px 0; letter-spacing: .02em; }
+  .s-plant { background: var(--go); color: #fff; }
+  .s-wait { background: var(--warn-bg); color: var(--warn); }
+  .s-done { background: var(--info-bg); color: var(--info); }
+  .s-idle { background: var(--line); color: var(--muted); }
+  .s-bad { background: var(--bad); color: #fff; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: .55; } }
+
+  .count { display: flex; align-items: baseline; justify-content: center; gap: 10px; margin: 4px 0 0; }
+  .count .big { font-size: 112px; font-weight: 900; line-height: .95; letter-spacing: -0.04em; }
+  .count .of { font-size: 30px; color: var(--muted); font-weight: 700; }
+  .missed { text-align: center; font-weight: 800; color: var(--bad); font-size: 18px; min-height: 24px; }
+
+  .prog { position: relative; height: 18px; background: var(--line); border-radius: 9px; overflow: hidden; margin: 12px 0 4px; }
+  .prog > div { position: absolute; inset: 0 auto 0 0; background: var(--go); border-radius: 9px; }
+  .progtxt { display: flex; justify-content: space-between; font-size: 14px; color: var(--muted); }
+
+  .steer { position: relative; height: 64px; margin: 8px 0 4px; }
+  .steer .track { position: absolute; left: 0; right: 0; top: 26px; height: 12px; border-radius: 6px;
+    background: linear-gradient(90deg, var(--bad-bg) 0 20%, var(--warn-bg) 20% 40%, var(--go-bg) 40% 60%, var(--warn-bg) 60% 80%, var(--bad-bg) 80%); }
+  .steer .mid { position: absolute; left: 50%; top: 14px; width: 3px; height: 36px; margin-left: -1.5px; background: var(--ink); border-radius: 2px; }
+  .steer .dot { position: absolute; top: 18px; width: 28px; height: 28px; margin-left: -14px; border-radius: 50%;
+    background: var(--ink); border: 4px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35); transition: left .18s linear; left: 50%; }
+  .steer .tick { position: absolute; top: 46px; font-size: 12px; color: var(--muted); transform: translateX(-50%); }
+  .steertxt { text-align: center; font-size: 24px; font-weight: 900; }
+
+  .flash { position: fixed; inset: 0; pointer-events: none; border: 0 solid var(--go); opacity: 0; transition: opacity .35s ease-out; z-index: 50; }
+  .flash.go { border-width: 18px; opacity: 1; transition: none; }
+
+  .pos { font-size: 13px; color: var(--muted); text-align: center; margin-top: 6px; }
+
+  /* rows view */
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .toolbar input { flex: 1; min-width: 140px; font: inherit; font-size: 16px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: #fff; }
+  .groups { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .chip { font-size: 14px; font-weight: 700; padding: 8px 12px; border-radius: 999px; border: 2px solid var(--line); background: #fff; color: var(--ink); }
+  .chip.on { border-color: var(--go); background: var(--go-bg); color: var(--go); }
+  .chip.part { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
+  .rowlist { list-style: none; margin: 0; padding: 0; }
+  .rowlist li { display: flex; align-items: center; gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--line); }
+  .rowlist li.cur { background: var(--go-bg); border-radius: 10px; padding-left: 8px; }
+  .rowlist .nm { font-weight: 700; font-size: 16px; }
+  .rowlist .meta { font-size: 13px; color: var(--muted); }
+  .rowlist .grow { flex: 1; min-width: 0; }
+  .sw { position: relative; width: 52px; height: 32px; flex: none; }
+  .sw input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .sw span { position: absolute; inset: 0; border-radius: 16px; background: #c9c4b8; transition: .15s; }
+  .sw span::after { content: ""; position: absolute; left: 3px; top: 3px; width: 26px; height: 26px; border-radius: 50%; background: #fff; transition: .15s; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+  .sw input:checked + span { background: var(--go); }
+  .sw input:checked + span::after { left: 23px; }
+
+  /* settings */
+  .field { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .field:last-child { border-bottom: 0; }
+  .field label { font-weight: 700; }
+  .field small { display: block; color: var(--muted); font-weight: 400; font-size: 13px; margin-top: 2px; }
+  .field input[type=number], .field select { width: 110px; font: inherit; font-size: 18px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); text-align: right; background: #fff; }
+  h2 { font-size: 17px; margin: 18px 4px 4px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .note { font-size: 14px; color: var(--muted); margin: 8px 2px; line-height: 1.4; }
+  .msg { font-size: 14px; font-weight: 700; color: var(--go); min-height: 20px; margin-top: 8px; }
+  .msg.err { color: var(--bad); }
+
+  /* bottom tabs */
+  nav { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,.96); border-top: 1px solid var(--line);
+    display: flex; justify-content: center; padding-bottom: env(safe-area-inset-bottom); z-index: 10; }
+  nav .tabs { display: flex; width: 100%; max-width: 560px; }
+  nav button { flex: 1; border: 0; background: none; padding: 12px 0 14px; font-weight: 800; font-size: 15px; color: var(--muted); }
+  nav button.on { color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+
+  .connect-hero { text-align: center; padding: 28px 12px; }
+  .connect-hero p { color: var(--muted); line-height: 1.45; }
+  .hide { display: none !important; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>🌳 TreePlanter</h1>
+    <span id="conn" class="conn">Not connected</span>
+    <button id="btnConnect" class="btn small">Connect</button>
+  </header>
+
+  <main>
+    <!-- ================= PLANT ================= -->
+    <section id="v-plant" class="view on">
+      <div id="hero" class="card connect-hero">
+        <p style="font-size:18px;color:var(--ink);font-weight:700;margin-top:0">Tap <b>Connect</b> and pick “TreePlanter”.</p>
+        <p>Open this page in the <b>Bluefy</b> browser (Safari can't use Bluetooth). Stay within about 30–50 ft of the planter box.</p>
+        <p id="noble" class="hide" style="color:var(--bad);font-weight:700">This browser has no Bluetooth access. Open this page in Bluefy.</p>
+      </div>
+
+      <div id="live" class="hide">
+        <div class="card">
+          <div class="gps">
+            <span id="fix" class="badge b-none">NO RTK</span>
+            <span id="sats">— sats</span>·<span id="acc">± — in</span>·<span id="spd">— mph</span>
+          </div>
+          <div id="rowname" class="rowname">Looking for a row…</div>
+          <div id="rowsub" class="rowsub">&nbsp;</div>
+          <div id="state" class="state s-idle">LINE UP ON A ROW</div>
+
+          <div class="count"><span id="planted" class="big">0</span><span id="total" class="of">/ 0</span></div>
+          <div id="missed" class="missed"></div>
+
+          <div class="prog"><div id="progbar" style="width:0%"></div></div>
+          <div class="progtxt"><span id="progpct">0%</span><span id="dirtxt"></span></div>
+        </div>
+
+        <div class="card">
+          <div class="steer">
+            <div class="track"></div><div class="mid"></div>
+            <div class="tick" style="left:0%;transform:none">2 ft</div><div class="tick" style="left:25%">1</div>
+            <div class="tick" style="left:75%">1</div><div class="tick" style="left:100%;transform:translateX(-100%);white-space:nowrap">2 ft</div>
+            <div id="dot" class="dot"></div>
+          </div>
+          <div id="steertxt" class="steertxt">—</div>
+        </div>
+        <div id="pos" class="pos"></div>
+      </div>
+    </section>
+
+    <!-- ================= ROWS ================= -->
+    <section id="v-rows" class="view">
+      <div class="card">
+        <div class="toolbar">
+          <input id="filter" type="search" placeholder="Filter rows (e.g. Granny)" autocomplete="off">
+        </div>
+        <div class="toolbar" style="margin-top:10px">
+          <button id="allOn" class="btn small ghost">All on</button>
+          <button id="allOff" class="btn small ghost">All off</button>
+          <span id="rowcount" class="note" style="margin-left:auto"></span>
+        </div>
+        <div id="groups" class="groups"></div>
+        <p class="note">Rows switched off are ignored by the planter: no lock, no flashes. Changes save on the planter box.</p>
+      </div>
+      <div class="card" style="padding-top:4px;padding-bottom:4px">
+        <ul id="rowlist" class="rowlist"></ul>
+        <p id="rowsEmpty" class="note">Connect to load the row list.</p>
+      </div>
+    </section>
+
+    <!-- ================= SETTINGS ================= -->
+    <section id="v-set" class="view">
+      <h2>Planter</h2>
+      <div class="card">
+        <div class="field"><label for="sOffset">Planter offset (ft)<small>Antenna to planter box, box behind antenna</small></label>
+          <input id="sOffset" type="number" step="0.05" min="1" max="30" inputmode="decimal"></div>
+        <div class="field"><label for="sFlash">White flash (ms)<small>Longest flash; shortens automatically at speed</small></label>
+          <input id="sFlash" type="number" step="100" min="200" max="5000" inputmode="numeric"></div>
+        <div class="field"><label for="sFixed">Plant on RTK FIXED only<small>Off = also plant on FLOAT (less accurate)</small></label>
+          <label class="sw"><input id="sFixed" type="checkbox"><span></span></label></div>
+        <button id="saveSet" class="btn" style="width:100%;margin-top:12px">Save to planter</button>
+        <div id="setMsg" class="msg"></div>
+      </div>
+
+      <h2>This row</h2>
+      <div class="card">
+        <button id="restartRow" class="btn ghost" style="width:100%">Start this row over</button>
+        <p class="note">Clears the tree count and planted spots for the current row, e.g. after re-driving a section.</p>
+      </div>
+
+      <h2>Bench test (no GPS)</h2>
+      <div class="card">
+        <div class="field"><label for="simRow">Row</label><select id="simRow" style="width:200px;text-align:left"></select></div>
+        <div class="field"><label for="simDir">Direction</label>
+          <select id="simDir" style="width:200px;text-align:left"><option value="1">Point 1 → 2</option><option value="-1">Point 2 → 1</option></select></div>
+        <div class="field"><label for="simSpd">Speed (ft/s)<small>1.5 ft/s ≈ 1 mph</small></label>
+          <input id="simSpd" type="number" step="0.5" min="0.5" max="10" value="1.5" inputmode="decimal"></div>
+        <div style="display:flex;gap:10px;margin-top:12px">
+          <button id="simGo" class="btn" style="flex:1">Start</button>
+          <button id="simStop" class="btn danger" style="flex:1">Stop</button>
+        </div>
+        <p class="note">Simulates driving the row: the real lights, LCD and this page all respond.</p>
+      </div>
+
+      <h2>Connection</h2>
+      <div class="card">
+        <button id="btnDisconnect" class="btn ghost" style="width:100%">Disconnect</button>
+        <p class="note" id="about"></p>
+      </div>
+    </section>
+  </main>
+
+  <nav><div class="tabs">
+    <button data-v="v-plant" class="on">Plant</button>
+    <button data-v="v-rows">Rows</button>
+    <button data-v="v-set">Settings</button>
+  </div></nav>
+</div>
+<div id="flash" class="flash"></div>
+
+<script>
+"use strict";
+// ---------- protocol (must match TreePlanter_2027.ino) ----------
+const U = n => `7a1e${n}-5b2c-4f6a-9d3e-0c1a2b3c4d5e`;
+const SVC = U("0000"), CH = {
+  status: U("0001"), pos: U("0002"), settings: U("0003"), mask: U("0004"),
+  rowSel: U("0005"), rowInfo: U("0006"), rowName: U("0007"), cmd: U("0008")
+};
+const FT_PER_MPH = 1.4667;
+
+const $ = id => document.getElementById(id);
+let device = null, chars = {}, connected = false, wantConnected = false;
+let rows = [], mask = new Uint8Array(20), settings = null, lastSeq = null, curRow = -1;
+let wakeLock = null;
+
+// ---------- serial GATT queue (Web Bluetooth allows one operation at a time) ----------
+let q = Promise.resolve();
+function gatt(fn) { const p = q.then(fn, fn); q = p.catch(() => {}); return p; }
+const write = (c, bytes) => gatt(() => c.writeValueWithResponse ? c.writeValueWithResponse(bytes) : c.writeValue(bytes));
+const read = c => gatt(() => c.readValue());
+
+// ---------- decode ----------
+function decodeStatus(dv) {
+  const f = dv.getUint8(0);
+  return {
+    carrier: f & 3, onRow: !!(f & 4), inZone: !!(f & 8), done: !!(f & 16), dirKnown: !!(f & 32), fwd: !!(f & 64), sim: !!(f & 128),
+    siv: dv.getUint8(1), row: dv.getInt16(2, true), planted: dv.getUint16(4, true), total: dv.getUint16(6, true),
+    missed: dv.getUint16(8, true), steer: dv.getInt16(10, true) / 100, startIn: dv.getInt16(12, true) / 10,
+    prog: dv.getUint16(14, true) / 10000, hAccMm: dv.getUint16(16, true), speed: dv.getUint8(18) / 10, seq: dv.getUint8(19)
+  };
+}
+function decodeSettings(dv) {
+  return { offset: dv.getUint16(0, true) / 100, flashMs: dv.getUint16(2, true), fixedOnly: !!dv.getUint8(4),
+           maskBytes: dv.getUint8(5), numRows: dv.getUint16(6, true), hash: dv.getUint16(8, true) };
+}
+
+// ---------- connect ----------
+function setConn(text, cls) { const e = $("conn"); e.textContent = text; e.className = "conn " + (cls || ""); }
+
+async function connect() {
+  if (!navigator.bluetooth) { $("noble").classList.remove("hide"); return; }
+  try {
+    setConn("Searching…", "busy");
+    device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SVC] }], optionalServices: [SVC] });
+    device.addEventListener("gattserverdisconnected", onDisconnected);
+    wantConnected = true;
+    await openGatt();
+  } catch (e) {
+    setConn(connected ? "Connected" : "Not connected", connected ? "ok" : "");
+    if (e && e.name !== "NotFoundError") console.warn(e);
+  }
+}
+
+async function openGatt() {
+  setConn("Connecting…", "busy");
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(SVC);
+  chars = {};
+  for (const [k, uuid] of Object.entries(CH)) chars[k] = await svc.getCharacteristic(uuid);
+  q = Promise.resolve();
+  settings = decodeSettings(await read(chars.settings));
+  const mv = await read(chars.mask); mask = new Uint8Array(mv.buffer, mv.byteOffset, mv.byteLength).slice();
+  fillSettings();
+  chars.status.addEventListener("characteristicvaluechanged", e => onStatus(decodeStatus(e.target.value)));
+  chars.pos.addEventListener("characteristicvaluechanged", e => onPos(e.target.value));
+  await gatt(() => chars.status.startNotifications());
+  await gatt(() => chars.pos.startNotifications());
+  connected = true;
+  setConn("Connected", "ok");
+  $("hero").classList.add("hide"); $("live").classList.remove("hide");
+  $("btnConnect").textContent = "Reconnect";
+  keepAwake();
+  await loadRows();
+}
+
+function onDisconnected() {
+  connected = false;
+  setConn("Lost — retrying", "busy");
+  if (!wantConnected) { setConn("Not connected"); return; }
+  setTimeout(async function retry() {
+    if (!wantConnected || connected) return;
+    try { await openGatt(); } catch (e) { setConn("Lost — retrying", "busy"); setTimeout(retry, 2500); }
+  }, 1000);
+}
+
+async function disconnect() {
+  wantConnected = false;
+  if (device && device.gatt.connected) device.gatt.disconnect();
+  connected = false; setConn("Not connected");
+  $("hero").classList.remove("hide"); $("live").classList.add("hide");
+  $("btnConnect").textContent = "Connect";
+}
+
+async function keepAwake() {
+  try { if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) { /* not supported */ }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && connected) keepAwake(); });
+
+// ---------- rows ----------
+function cacheKey() { return "tp-rows-" + settings.hash + "-" + settings.numRows; }
+
+async function loadRows() {
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem(cacheKey()) || "null"); } catch (e) {}
+  if (cached && cached.length === settings.numRows) { rows = cached; renderRows(); return; }
+  rows = [];
+  $("rowsEmpty").textContent = "Loading rows…";
+  $("rowsEmpty").classList.remove("hide");
+  const dec = new TextDecoder();
+  for (let i = 0; i < settings.numRows; i++) {
+    const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, i, true);
+    await write(chars.rowSel, b);
+    const info = await read(chars.rowInfo), name = await read(chars.rowName);
+    const raw = new Uint8Array(name.buffer, name.byteOffset, name.byteLength).slice(); const z = raw.indexOf(0);
+    rows.push({ i, trees: info.getUint16(2, true), len: info.getUint16(4, true) / 10, brg: info.getUint16(6, true) / 10,
+                name: dec.decode(z >= 0 ? raw.slice(0, z) : raw) });
+    if (i % 8 === 7) $("rowsEmpty").textContent = `Loading rows… ${i + 1} of ${settings.numRows}`;
+  }
+  try { localStorage.setItem(cacheKey(), JSON.stringify(rows)); } catch (e) {}
+  renderRows();
+}
+
+const isOn = i => (i >> 3) >= mask.length ? true : !!(mask[i >> 3] & (1 << (i & 7)));
+function setOn(i, on) { if ((i >> 3) >= mask.length) return; if (on) mask[i >> 3] |= 1 << (i & 7); else mask[i >> 3] &= ~(1 << (i & 7)); }
+
+// group = row name without its first word, e.g. "NR_6 Granny Smith" -> "Granny Smith"
+const groupOf = r => r.name.includes(" ") ? r.name.slice(r.name.indexOf(" ") + 1) : "Other";
+
+function compass(b) { return ["N","NE","E","SE","S","SW","W","NW"][Math.round(b / 45) % 8]; }
+
+function renderRows() {
+  const f = $("filter").value.trim().toLowerCase();
+  const ul = $("rowlist"); ul.innerHTML = "";
+  $("rowsEmpty").classList.toggle("hide", rows.length > 0);
+  let shown = 0;
+  for (const r of rows) {
+    if (f && !r.name.toLowerCase().includes(f)) continue;
+    shown++;
+    const li = document.createElement("li");
+    if (r.i === curRow) li.className = "cur";
+    li.innerHTML = `<div class="grow"><div class="nm"></div><div class="meta">#${r.i + 1} · ${r.trees} trees · ${r.len.toFixed(1)} ft · heading ${compass(r.brg)} (${r.brg.toFixed(0)}°)</div></div>
+      <label class="sw"><input type="checkbox"><span></span></label>`;
+    li.querySelector(".nm").textContent = r.name;
+    const cb = li.querySelector("input"); cb.checked = isOn(r.i);
+    cb.addEventListener("change", () => { setOn(r.i, cb.checked); sendMask(); renderCounts(); });
+    ul.appendChild(li);
+  }
+  renderCounts();
+  // bench-test row picker
+  const sel = $("simRow"), keep = sel.value; sel.innerHTML = "";
+  for (const r of rows) { const o = document.createElement("option"); o.value = r.i + 1; o.textContent = `#${r.i + 1} ${r.name}`; sel.appendChild(o); }
+  if (keep) sel.value = keep;
+}
+
+function renderCounts() {
+  const on = rows.filter(r => isOn(r.i));
+  $("rowcount").textContent = rows.length ? `${on.length} of ${rows.length} rows on · ${on.reduce((a, r) => a + r.trees, 0).toLocaleString()} trees` : "";
+  const groups = new Map();
+  for (const r of rows) { const g = groupOf(r); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(r); }
+  const box = $("groups"); box.innerHTML = "";
+  for (const [g, list] of groups) {
+    const n = list.filter(r => isOn(r.i)).length;
+    const b = document.createElement("button");
+    b.className = "chip " + (n === list.length ? "on" : n ? "part" : "");
+    b.textContent = `${g} (${n}/${list.length})`;
+    b.addEventListener("click", () => { const turnOn = n < list.length; list.forEach(r => setOn(r.i, turnOn)); sendMask(); renderRows(); });
+    box.appendChild(b);
+  }
+}
+
+let maskTimer = null;
+function sendMask() {
+  clearTimeout(maskTimer);
+  maskTimer = setTimeout(() => { if (connected) write(chars.mask, mask.slice()).catch(e => console.warn(e)); }, 300);
+}
+
+// ---------- live status ----------
+function onStatus(s) {
+  const fix = $("fix");
+  if (s.sim) { fix.textContent = "SIM"; fix.className = "badge b-sim"; }
+  else if (s.carrier === 2) { fix.textContent = "RTK FIX"; fix.className = "badge b-fix"; }
+  else if (s.carrier === 1) { fix.textContent = "FLOAT"; fix.className = "badge b-float"; }
+  else { fix.textContent = "NO RTK"; fix.className = "badge b-none"; }
+  $("sats").textContent = `${s.siv} sats`;
+  $("acc").textContent = `± ${(s.hAccMm / 25.4).toFixed(1)} in`;
+  $("spd").textContent = `${(s.speed / FT_PER_MPH).toFixed(1)} mph`;
+
+  const r = rows[s.row];
+  if (s.row !== curRow) { curRow = s.row; if ($("v-rows").classList.contains("on")) renderRows(); }
+  $("rowname").textContent = s.onRow ? (r ? r.name : `Row #${s.row + 1}`) : "Looking for a row…";
+  $("rowsub").textContent = s.onRow && r ? `Row ${s.row + 1} of ${rows.length} · ${r.len.toFixed(1)} ft · heading ${compass(r.brg)}` : " ";
+
+  const fixOk = s.sim || s.carrier === 2 || (s.carrier === 1 && settings && !settings.fixedOnly);
+  const st = $("state");
+  if (!fixOk) { st.textContent = s.carrier === 1 ? "FLOAT — WAITING FOR RTK FIX" : "NO RTK FIX"; st.className = "state s-bad"; }
+  else if (!s.onRow) { st.textContent = "LINE UP ON A ROW"; st.className = "state s-idle"; }
+  else if (!s.dirKnown) { st.textContent = "DRIVE FORWARD"; st.className = "state s-idle"; }
+  else if (s.done) { st.textContent = "ROW DONE ✓"; st.className = "state s-done"; }
+  else if (s.inZone) { st.textContent = "PLANTING"; st.className = "state s-plant"; }
+  else if (s.startIn > 0) { st.textContent = `START IN ${s.startIn.toFixed(1)} FT`; st.className = "state s-wait"; }
+  else { st.textContent = "OUTSIDE PLANTING ZONE"; st.className = "state s-wait"; }
+
+  $("planted").textContent = s.planted;
+  $("total").textContent = `/ ${s.total}`;
+  $("missed").textContent = s.missed ? `${s.missed} missed` : "";
+  const pct = Math.round(s.prog * 100);
+  $("progbar").style.width = pct + "%";
+  $("progpct").textContent = s.onRow ? `${pct}% through row` : "";
+  $("dirtxt").textContent = s.onRow && s.dirKnown ? (s.fwd ? "driving point 1 → 2" : "driving point 2 → 1") : "";
+
+  // steering: + steer = right of the row -> steer left
+  const off = Math.max(-2, Math.min(2, s.steer));
+  $("dot").style.left = (50 + off / 2 * 50) + "%";
+  const a = Math.abs(s.steer);
+  const t = $("steertxt");
+  if (!s.onRow || !s.dirKnown) { t.textContent = "—"; t.style.color = "var(--muted)"; }
+  else if (a < 0.15) { t.textContent = "ON LINE"; t.style.color = "var(--go)"; }
+  else { t.textContent = s.steer > 0 ? `◀ STEER LEFT ${a.toFixed(1)} ft` : `STEER RIGHT ${a.toFixed(1)} ft ▶`;
+         t.style.color = a < 0.5 ? "var(--warn)" : "var(--bad)"; }
+
+  if (lastSeq !== null && s.seq !== lastSeq) doFlash();
+  lastSeq = s.seq;
+}
+
+function onPos(dv) {
+  const lat = dv.getFloat64(0, true), lon = dv.getFloat64(8, true);
+  if (lat) $("pos").textContent = `${lat.toFixed(8)}, ${lon.toFixed(8)}`;
+}
+
+function doFlash() {
+  const f = $("flash"); f.classList.add("go");
+  requestAnimationFrame(() => requestAnimationFrame(() => f.classList.remove("go")));
+}
+
+// ---------- settings ----------
+function fillSettings() {
+  $("sOffset").value = settings.offset.toFixed(2);
+  $("sFlash").value = settings.flashMs;
+  $("sFixed").checked = settings.fixedOnly;
+  $("about").textContent = `Planter has ${settings.numRows} rows loaded (list id ${settings.hash.toString(16)}).`;
+}
+
+async function saveSettings() {
+  const m = $("setMsg"); m.className = "msg";
+  if (!connected) { m.textContent = "Not connected."; m.className = "msg err"; return; }
+  const off = parseFloat($("sOffset").value), fl = parseInt($("sFlash").value, 10);
+  if (!(off >= 1 && off <= 30)) { m.textContent = "Offset must be 1–30 ft."; m.className = "msg err"; return; }
+  if (!(fl >= 200 && fl <= 5000)) { m.textContent = "Flash must be 200–5000 ms."; m.className = "msg err"; return; }
+  const b = new Uint8Array(10), dv = new DataView(b.buffer);
+  dv.setUint16(0, Math.round(off * 100), true); dv.setUint16(2, fl, true); b[4] = $("sFixed").checked ? 1 : 0;
+  try {
+    await write(chars.settings, b);
+    settings = decodeSettings(await read(chars.settings));
+    fillSettings();
+    m.textContent = `Saved: offset ${settings.offset.toFixed(2)} ft, flash ${settings.flashMs} ms, ${settings.fixedOnly ? "FIXED only" : "FIXED or FLOAT"}.`;
+  } catch (e) { m.textContent = "Save failed: " + e.message; m.className = "msg err"; }
+}
+
+function cmd(op, arg = 0) {
+  if (!connected) return Promise.resolve();
+  const b = new Uint8Array(3); b[0] = op; new DataView(b.buffer).setInt16(1, arg, true);
+  return write(chars.cmd, b).catch(e => console.warn(e));
+}
+
+// ---------- wiring ----------
+$("btnConnect").addEventListener("click", connect);
+$("btnDisconnect").addEventListener("click", disconnect);
+$("saveSet").addEventListener("click", saveSettings);
+$("restartRow").addEventListener("click", () => cmd(4));
+$("simGo").addEventListener("click", async () => {
+  await cmd(3, Math.round(parseFloat($("simSpd").value || "1.5") * 10));
+  await cmd(1, parseInt($("simRow").value, 10) * parseInt($("simDir").value, 10));
+  showView("v-plant");
+});
+$("simStop").addEventListener("click", () => cmd(2));
+$("filter").addEventListener("input", renderRows);
+$("allOn").addEventListener("click", () => { rows.forEach(r => setOn(r.i, true)); sendMask(); renderRows(); });
+$("allOff").addEventListener("click", () => { rows.forEach(r => setOn(r.i, false)); sendMask(); renderRows(); });
+
+function showView(id) {
+  document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === id));
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.v === id));
+  if (id === "v-rows") renderRows();
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => showView(b.dataset.v)));
+if (!navigator.bluetooth) $("noble").classList.remove("hide");
+</script>
+</body>
+</html>

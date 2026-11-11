@@ -123,6 +123,17 @@
   .msg { font-size: 14px; font-weight: 700; color: var(--go); min-height: 20px; margin-top: 8px; }
   .msg.err { color: var(--bad); }
 
+  /* diagnostics */
+  .dg { width: 100%; border-collapse: collapse; font-size: 15px; }
+  .dg td { padding: 7px 2px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .dg td:first-child { color: var(--muted); width: 42%; }
+  .dg td:last-child { font-weight: 700; }
+  .verdict { border-radius: 12px; padding: 10px 12px; margin-top: 8px; font-weight: 700; font-size: 15px; line-height: 1.35; }
+  .v-ok { background: var(--go-bg); color: var(--go); }
+  .v-warn { background: var(--warn-bg); color: var(--warn); }
+  .v-bad { background: var(--bad-bg); color: var(--bad); }
+  .v-info { background: var(--info-bg); color: var(--info); }
+
   /* bottom tabs */
   nav { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,.96); border-top: 1px solid var(--line);
     display: flex; justify-content: center; padding-bottom: env(safe-area-inset-bottom); z-index: 10; }
@@ -209,6 +220,18 @@
 
     <!-- ================= SETTINGS ================= -->
     <section id="v-set" class="view">
+      <h2>Diagnostics</h2>
+      <div class="card">
+        <table class="dg"><tbody id="diagRows"><tr><td>Status</td><td>Connect to see diagnostics</td></tr></tbody></table>
+        <div id="diagVerdicts"></div>
+        <div style="display:flex;gap:10px;margin-top:12px">
+          <button id="btnMosaicSetup" class="btn ghost hide" style="flex:1">Mosaic setup</button>
+          <button id="btnUbxFix" class="btn ghost hide" style="flex:1">u-blox rover fix</button>
+        </div>
+        <div id="diagMsg" class="msg"></div>
+        <p class="note">Refreshes every 2 s while this tab is open. "Mosaic setup" does the same as typing M in the Serial Monitor; "u-blox rover fix" the same as F.</p>
+      </div>
+
       <h2>Planter</h2>
       <div class="card">
         <div class="field"><label for="sOffset">Planter offset (ft)<small>Antenna to planter box, box behind antenna</small></label>
@@ -263,7 +286,7 @@
 const U = n => `7a1e${n}-5b2c-4f6a-9d3e-0c1a2b3c4d5e`;
 const SVC = U("0000"), CH = {
   status: U("0001"), pos: U("0002"), settings: U("0003"), mask: U("0004"),
-  rowSel: U("0005"), rowInfo: U("0006"), rowName: U("0007"), cmd: U("0008"), links: U("0009")
+  rowSel: U("0005"), rowInfo: U("0006"), rowName: U("0007"), cmd: U("0008"), links: U("0009"), diag: U("000a")
 };
 const FT_PER_MPH = 1.4667;
 
@@ -292,6 +315,14 @@ function decodeStatus(dv) {
 function decodeLinks(dv) {
   return { fixType: dv.getUint8(0), age: dv.getUint8(1), src: dv.getUint8(2),
            bps: dv.getUint16(4, true), msgs10: dv.getUint16(6, true) };
+}
+function decodeDiag(dv) {
+  const i16 = o => dv.getInt16(o, true), u16 = o => dv.getUint16(o, true), u32 = o => dv.getUint32(o, true);
+  return { ver: dv.getUint8(0), gps: dv.getUint8(1), q: dv.getUint8(2), sats: dv.getUint8(3), hdop: u16(4),
+           dec: dv.getUint8(6), ggaRate: dv.getUint8(7), ggaAge: i16(8), station: i16(10), hAccMm: u16(12),
+           bytesAcc: u32(14), msgAcc: u32(18), bytesRx: u32(22), msgRx: u32(26), cd: dv.getUint8(30),
+           corrAge: dv.getUint8(31), bps: u16(32), badCs: u16(34), haveLink: !!dv.getUint8(36),
+           tmode: dv.getUint8(37), rtcmIn: dv.getUint8(38), baud: u32(40) };
 }
 function decodeSettings(dv) {
   return { offset: dv.getUint16(0, true) / 100, flashMs: dv.getUint16(2, true), fixedOnly: !!dv.getUint8(4),
@@ -322,7 +353,7 @@ async function openGatt() {
   chars = {};
   for (const [k, uuid] of Object.entries(CH)) {
     try { chars[k] = await svc.getCharacteristic(uuid); }
-    catch (e) { if (k === "links") chars[k] = null; else throw e; }   // links: newer sketches only
+    catch (e) { if (k === "links" || k === "diag") chars[k] = null; else throw e; }   // newer sketches only
   }
   q = Promise.resolve();
   settings = decodeSettings(await read(chars.settings));
@@ -520,6 +551,70 @@ function renderLights() {
 }
 setInterval(() => { if (connected) renderLights(); }, 1000);   // catch a link that goes quiet
 
+// ---------- diagnostics ----------
+const Q = ["no fix", "standalone", "DGPS", "PPS", "RTK FIXED", "RTK FLOAT", "dead reckoning", "manual", "simulated"];
+const GPSNAME = ["none detected", "u-blox ZED-F9P", "Septentrio mosaic-X5", "bench simulation"];
+let diagTimer = null;
+
+function diagVerdicts(d) {
+  const v = [];   // [class, text]
+  if (d.gps === 3) return [["v-info", "Bench simulation running - stop it to see real GPS diagnostics."]];
+  if (d.gps === 0) return [["v-bad", "No GPS board detected. Check it is stacked/plugged in, then power-cycle the planter."]];
+  if (d.gps === 1) {
+    if (d.tmode === 1 || d.tmode === 2) v.push(["v-bad", "u-blox is in BASE mode, so it ignores corrections. Tap \"u-blox rover fix\"."]);
+    if (d.rtcmIn === 0) v.push(["v-bad", "u-blox correction input (RTCM3 on UART2) is OFF. Tap \"u-blox rover fix\"."]);
+  }
+  // corrections
+  if (!d.haveLink) v.push(["v-warn", d.gps === 2 ? "Correction monitor not running. Tap \"Mosaic setup\"." : "Correction monitor not available on this receiver firmware."]);
+  else if (d.bytesRx === 0) v.push(["v-bad", "Nothing arriving from the XBee. Check the hotspot, the XBee's NTRIP status (192.168.4.1) and the RTK2go mountpoint."]);
+  else if (d.msgAcc === 0) v.push(["v-bad", "Data arrives from the XBee but no corrections are accepted: the XBee's UART baud doesn't match, or correction input is off. Tap the setup button."]);
+  else if (d.corrAge <= 3) v.push(["v-ok", "Corrections OK: arriving and accepted."]);
+  else v.push(["v-bad", `Corrections stopped ${d.corrAge >= 254 ? "minutes" : d.corrAge + " s"} ago: hotspot, XBee or RTK2go connection dropped.`]);
+  // position
+  if (d.gps === 2 && d.ggaRate === 0) v.push(["v-bad", "No position messages from the mosaic. Tap \"Mosaic setup\"."]);
+  else if (d.q === 0) v.push(["v-warn", "No position yet. The antenna needs a clear view of the sky."]);
+  else if (d.q === 4) v.push(["v-ok", "RTK FIXED. Ready to plant."]);
+  else if (d.q === 5) v.push(["v-warn", "RTK FLOAT: corrections in use. FIXED usually follows within a few minutes; if it never does, check the base's fixed position and the mountpoint."]);
+  else if (d.corrAge <= 3) v.push(["v-warn", "Position without RTK even though corrections arrive. Give it a minute; if it stays, the base position/mountpoint is suspect."]);
+  if (d.gps === 2 && d.q > 0 && d.dec !== 255 && d.dec < 5) v.push(["v-warn", `Only ${d.dec} decimals in the position: coarse. Turn on extra NMEA precision on the mosaic.`]);
+  return v;
+}
+
+function renderDiag(d) {
+  const rows = [];
+  const add = (k, val) => rows.push(`<tr><td>${k}</td><td>${val}</td></tr>`);
+  add("GPS board", GPSNAME[d.gps] || "?");
+  add("Position", `${Q[d.q] || "?"} · ${d.sats} sats${d.hdop !== 0xFFFF && d.q ? " · HDOP " + (d.hdop / 10).toFixed(1) : ""}`);
+  if (d.hAccMm) add("Accuracy", `± ${(d.hAccMm / 25.4).toFixed(1)} in`);
+  if (d.gps === 2) add("Position messages", `${d.ggaRate} per second${d.badCs ? " · " + d.badCs + " bad checksums" : ""}`);
+  if (d.dec !== 255) add("Position precision", `${d.dec} decimals (~${(6076.12 * 12 / 60 / Math.pow(10, d.dec)).toFixed(2)} in steps)`);
+  if (d.haveLink) {
+    const port = d.gps === 2 ? ({1: "COM1", 2: "COM2", 3: "COM3", 4: "COM4"}[d.cd] || "port " + d.cd) : "UART2";
+    add(`Corrections in (${port})`, `${d.bps.toLocaleString()} bytes/s · last ${d.corrAge === 255 ? "never" : d.corrAge >= 254 ? "minutes ago" : d.corrAge + " s ago"}`);
+    if (d.gps === 2) {
+      const rej = d.msgRx - d.msgAcc;
+      add("Correction messages", `${d.msgAcc.toLocaleString()} accepted${rej ? " · " + rej.toLocaleString() + " rejected" : ""}`);
+    } else add("Correction messages", `${d.msgAcc.toLocaleString()} decoded · ${d.msgRx.toLocaleString()} bytes skipped`);
+  }
+  if (d.gps === 2) add("Correction age in solution", d.ggaAge < 0 ? "none (not applied yet)" : `${(d.ggaAge / 10).toFixed(1)} s · base ID ${d.station < 0 ? "-" : d.station}`);
+  if (d.gps === 1) {
+    add("Receiver mode", d.tmode === 0 ? "rover" : d.tmode === 1 ? "BASE (survey-in)" : d.tmode === 2 ? "BASE (fixed)" : "unknown");
+    add("Correction input", d.rtcmIn === 1 ? "on" : d.rtcmIn === 0 ? "OFF" : "unknown");
+    add("UART2 baud", d.baud ? d.baud.toLocaleString() : "unknown");
+  }
+  $("diagRows").innerHTML = rows.join("");
+  $("diagVerdicts").innerHTML = diagVerdicts(d).map(([c, t]) => `<div class="verdict ${c}"></div>`).join("");
+  const vs = diagVerdicts(d); document.querySelectorAll("#diagVerdicts .verdict").forEach((e, i) => e.textContent = vs[i][1]);
+  $("btnMosaicSetup").classList.toggle("hide", d.gps !== 2);
+  $("btnUbxFix").classList.toggle("hide", d.gps !== 1);
+}
+
+async function pollDiag() {
+  if (!connected || !$("v-set").classList.contains("on")) return;
+  if (!chars.diag) { $("diagRows").innerHTML = "<tr><td>Status</td><td>Update the planter sketch to v1.7 or later for diagnostics</td></tr>"; return; }
+  try { renderDiag(decodeDiag(await read(chars.diag))); } catch (e) { console.warn(e); }
+}
+
 function onPos(dv) {
   const lat = dv.getFloat64(0, true), lon = dv.getFloat64(8, true);
   if (lat) $("pos").textContent = `${lat.toFixed(8)}, ${lon.toFixed(8)}`;
@@ -571,6 +666,15 @@ $("simGo").addEventListener("click", async () => {
   showView("v-plant");
 });
 $("simStop").addEventListener("click", () => cmd(2));
+$("btnMosaicSetup").addEventListener("click", async () => {
+  $("diagMsg").className = "msg"; $("diagMsg").textContent = "Sending setup to the mosaic... (about 5 s)";
+  await cmd(5); setTimeout(() => { $("diagMsg").textContent = "Mosaic setup sent and saved."; pollDiag(); }, 6000);
+});
+$("btnUbxFix").addEventListener("click", async () => {
+  $("diagMsg").className = "msg"; $("diagMsg").textContent = "Setting u-blox to rover with correction input on...";
+  await cmd(6); setTimeout(() => { $("diagMsg").textContent = "Done."; pollDiag(); }, 3000);
+});
+diagTimer = setInterval(pollDiag, 2000);
 $("filter").addEventListener("input", renderRows);
 $("allOn").addEventListener("click", () => { rows.forEach(r => setOn(r.i, true)); sendMask(); renderRows(); });
 $("allOff").addEventListener("click", () => { rows.forEach(r => setOn(r.i, false)); sendMask(); renderRows(); });
@@ -579,6 +683,7 @@ function showView(id) {
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === id));
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.v === id));
   if (id === "v-rows") renderRows();
+  if (id === "v-set") pollDiag();
   window.scrollTo(0, 0);
 }
 document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => showView(b.dataset.v)));

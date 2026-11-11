@@ -6,6 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#f4f1ea">
 <title>TreePlanter</title>
+<!-- TreePlanter phone page v1.7b (2026-11-11) - diagnostics errors shown on screen -->
 <style>
   :root {
     --bg: #f4f1ea; --card: #ffffff; --ink: #14140f; --muted: #6b6a62; --line: #dcd7cc;
@@ -149,7 +150,7 @@
 <body>
 <div class="app">
   <header>
-    <h1>🌳 TreePlanter</h1>
+    <h1>🌳 TreePlanter <span style="font-size:12px;color:var(--muted);font-weight:600">page v1.7b</span></h1>
     <span id="conn" class="conn">Not connected</span>
     <button id="btnConnect" class="btn small">Connect</button>
   </header>
@@ -222,7 +223,7 @@
     <section id="v-set" class="view">
       <h2>Diagnostics</h2>
       <div class="card">
-        <table class="dg"><tbody id="diagRows"><tr><td>Status</td><td>Connect to see diagnostics</td></tr></tbody></table>
+        <table class="dg"><tbody id="diagRows"><tr><td>Status</td><td>Page v1.7b - connect to see diagnostics</td></tr></tbody></table>
         <div id="diagVerdicts"></div>
         <div style="display:flex;gap:10px;margin-top:12px">
           <button id="btnMosaicSetup" class="btn ghost hide" style="flex:1">Mosaic setup</button>
@@ -298,7 +299,8 @@ let lastStatus = null, lastLinks = null, linksAt = 0;
 
 // ---------- serial GATT queue (Web Bluetooth allows one operation at a time) ----------
 let q = Promise.resolve();
-function gatt(fn) { const p = q.then(fn, fn); q = p.catch(() => {}); return p; }
+function withTimeout(p, ms) { return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("no answer within " + ms / 1000 + " s")), ms))]); }
+function gatt(fn) { const run = () => withTimeout(Promise.resolve().then(fn), 5000); const p = q.then(run, run); q = p.catch(() => {}); return p; }
 const write = (c, bytes) => gatt(() => c.writeValueWithResponse ? c.writeValueWithResponse(bytes) : c.writeValue(bytes));
 const read = c => gatt(() => c.readValue());
 
@@ -609,10 +611,22 @@ function renderDiag(d) {
   $("btnUbxFix").classList.toggle("hide", d.gps !== 1);
 }
 
+let diagBusy = false, diagOkAt = 0, diagRetryAt = 0;
+function diagStatus(text) { $("diagRows").innerHTML = ""; const r = $("diagRows").insertRow(); r.insertCell().textContent = "Status"; r.insertCell().textContent = text; }
 async function pollDiag() {
-  if (!connected || !$("v-set").classList.contains("on")) return;
-  if (!chars.diag) { $("diagRows").innerHTML = "<tr><td>Status</td><td>Update the planter sketch to v1.7 or later for diagnostics</td></tr>"; return; }
-  try { renderDiag(decodeDiag(await read(chars.diag))); } catch (e) { console.warn(e); }
+  if (!$("v-set").classList.contains("on")) return;
+  if (!connected) { diagStatus("Not connected - tap Connect"); return; }
+  if (!chars.diag) { diagStatus("This planter sketch has no diagnostics: upload v1.7 or later, then tap Reconnect."); return; }
+  if (diagBusy || Date.now() < diagRetryAt) return;
+  diagBusy = true;
+  try {
+    const dv = await read(chars.diag);
+    if (dv.byteLength < 44) throw new Error("short reply (" + dv.byteLength + " of 44 bytes)");
+    renderDiag(decodeDiag(dv)); diagOkAt = Date.now();
+  } catch (e) {
+    diagStatus("Diagnostics read failed: " + (e && e.message ? e.message : e) + ". Tap Reconnect; if it repeats, screenshot this.");
+    diagRetryAt = Date.now() + 10000; // back off so the rest of the page keeps working
+  } finally { diagBusy = false; }
 }
 
 function onPos(dv) {
@@ -683,7 +697,7 @@ function showView(id) {
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === id));
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.v === id));
   if (id === "v-rows") renderRows();
-  if (id === "v-set") pollDiag();
+  if (id === "v-set") { diagRetryAt = 0; pollDiag(); }
   window.scrollTo(0, 0);
 }
 document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => showView(b.dataset.v)));

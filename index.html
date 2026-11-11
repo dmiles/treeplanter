@@ -48,6 +48,17 @@
   .b-float { background: var(--warn-bg); color: var(--warn); }
   .b-none { background: var(--bad-bg); color: var(--bad); }
   .b-sim { background: var(--info-bg); color: var(--info); }
+  .lights { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
+  .light { border-radius: 12px; padding: 8px 8px; background: var(--line); color: var(--muted); min-width: 0; }
+  .light .lt { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .02em; white-space: nowrap; overflow: hidden; }
+  .light .lt i { width: 12px; height: 12px; border-radius: 50%; background: #9c978b; flex: none; }
+  .light .lv { font-size: 17px; font-weight: 800; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .light.g { background: var(--go-bg); color: var(--go); } .light.g i { background: var(--go); }
+  .light.a { background: var(--warn-bg); color: var(--warn); } .light.a i { background: #e08a00; }
+  .light.r { background: var(--bad-bg); color: var(--bad); } .light.r i { background: var(--bad); animation: blink 1s steps(2) infinite; }
+  .light.b { background: var(--info-bg); color: var(--info); } .light.b i { background: var(--info); }
+  .hint { font-size: 14px; font-weight: 700; color: var(--bad); margin: -2px 2px 8px; line-height: 1.35; }
+  @media (max-width: 360px) { header h1 { font-size: 17px; } .conn { font-size: 12px; padding: 4px 8px; } .light .lv { font-size: 15px; } }
   .rowname { font-size: 26px; font-weight: 800; margin: 6px 0 2px; line-height: 1.15; }
   .rowsub { font-size: 15px; color: var(--muted); }
   .state { font-size: 22px; font-weight: 900; text-align: center; padding: 14px; border-radius: 14px; margin: 10px 0; letter-spacing: .02em; }
@@ -143,9 +154,14 @@
 
       <div id="live" class="hide">
         <div class="card">
+          <div class="lights">
+            <div id="lSat" class="light"><div class="lt"><i></i>Sats</div><div class="lv">—</div></div>
+            <div id="lCor" class="light"><div class="lt"><i></i>NTRIP</div><div class="lv">—</div></div>
+            <div id="lRtk" class="light"><div class="lt"><i></i>RTK</div><div class="lv">—</div></div>
+          </div>
+          <div id="hint" class="hint hide"></div>
           <div class="gps">
-            <span id="fix" class="badge b-none">NO RTK</span>
-            <span id="sats">— sats</span>·<span id="acc">± — in</span>·<span id="spd">— mph</span>
+            <span id="acc">± — in</span>·<span id="spd">— mph</span>·<span id="corrRate"></span>
           </div>
           <div id="rowname" class="rowname">Looking for a row…</div>
           <div id="rowsub" class="rowsub">&nbsp;</div>
@@ -247,7 +263,7 @@
 const U = n => `7a1e${n}-5b2c-4f6a-9d3e-0c1a2b3c4d5e`;
 const SVC = U("0000"), CH = {
   status: U("0001"), pos: U("0002"), settings: U("0003"), mask: U("0004"),
-  rowSel: U("0005"), rowInfo: U("0006"), rowName: U("0007"), cmd: U("0008")
+  rowSel: U("0005"), rowInfo: U("0006"), rowName: U("0007"), cmd: U("0008"), links: U("0009")
 };
 const FT_PER_MPH = 1.4667;
 
@@ -255,6 +271,7 @@ const $ = id => document.getElementById(id);
 let device = null, chars = {}, connected = false, wantConnected = false;
 let rows = [], mask = new Uint8Array(20), settings = null, lastSeq = null, curRow = -1;
 let wakeLock = null;
+let lastStatus = null, lastLinks = null, linksAt = 0;
 
 // ---------- serial GATT queue (Web Bluetooth allows one operation at a time) ----------
 let q = Promise.resolve();
@@ -271,6 +288,10 @@ function decodeStatus(dv) {
     missed: dv.getUint16(8, true), steer: dv.getInt16(10, true) / 100, startIn: dv.getInt16(12, true) / 10,
     prog: dv.getUint16(14, true) / 10000, hAccMm: dv.getUint16(16, true), speed: dv.getUint8(18) / 10, seq: dv.getUint8(19)
   };
+}
+function decodeLinks(dv) {
+  return { fixType: dv.getUint8(0), age: dv.getUint8(1), src: dv.getUint8(2),
+           bps: dv.getUint16(4, true), msgs10: dv.getUint16(6, true) };
 }
 function decodeSettings(dv) {
   return { offset: dv.getUint16(0, true) / 100, flashMs: dv.getUint16(2, true), fixedOnly: !!dv.getUint8(4),
@@ -299,7 +320,10 @@ async function openGatt() {
   const server = await device.gatt.connect();
   const svc = await server.getPrimaryService(SVC);
   chars = {};
-  for (const [k, uuid] of Object.entries(CH)) chars[k] = await svc.getCharacteristic(uuid);
+  for (const [k, uuid] of Object.entries(CH)) {
+    try { chars[k] = await svc.getCharacteristic(uuid); }
+    catch (e) { if (k === "links") chars[k] = null; else throw e; }   // links: newer sketches only
+  }
   q = Promise.resolve();
   settings = decodeSettings(await read(chars.settings));
   const mv = await read(chars.mask); mask = new Uint8Array(mv.buffer, mv.byteOffset, mv.byteLength).slice();
@@ -308,6 +332,10 @@ async function openGatt() {
   chars.pos.addEventListener("characteristicvaluechanged", e => onPos(e.target.value));
   await gatt(() => chars.status.startNotifications());
   await gatt(() => chars.pos.startNotifications());
+  if (chars.links) {
+    chars.links.addEventListener("characteristicvaluechanged", e => { lastLinks = decodeLinks(e.target.value); linksAt = Date.now(); renderLights(); });
+    await gatt(() => chars.links.startNotifications());
+  }
   connected = true;
   setConn("Connected", "ok");
   $("hero").classList.add("hide"); $("live").classList.remove("hide");
@@ -419,12 +447,8 @@ function sendMask() {
 
 // ---------- live status ----------
 function onStatus(s) {
-  const fix = $("fix");
-  if (s.sim) { fix.textContent = "SIM"; fix.className = "badge b-sim"; }
-  else if (s.carrier === 2) { fix.textContent = "RTK FIX"; fix.className = "badge b-fix"; }
-  else if (s.carrier === 1) { fix.textContent = "FLOAT"; fix.className = "badge b-float"; }
-  else { fix.textContent = "NO RTK"; fix.className = "badge b-none"; }
-  $("sats").textContent = `${s.siv} sats`;
+  lastStatus = s;
+  renderLights();
   $("acc").textContent = `± ${(s.hAccMm / 25.4).toFixed(1)} in`;
   $("spd").textContent = `${(s.speed / FT_PER_MPH).toFixed(1)} mph`;
 
@@ -464,6 +488,37 @@ function onStatus(s) {
   if (lastSeq !== null && s.seq !== lastSeq) doFlash();
   lastSeq = s.seq;
 }
+
+function light(id, cls, val) { const e = $(id); e.className = "light " + cls; e.querySelector(".lv").textContent = val; }
+
+function renderLights() {
+  const s = lastStatus, L = (lastLinks && Date.now() - linksAt < 4000) ? lastLinks : null;
+  if (!s) return;
+  const hints = [];
+  // 1. Satellites
+  const ft = L ? L.fixType : (s.siv > 0 ? 3 : 0);
+  if (s.sim) light("lSat", "b", "SIM");
+  else if (ft >= 3 && s.siv >= 8) light("lSat", "g", `${s.siv} sats`);
+  else if (ft >= 2) light("lSat", "a", `${s.siv} sats`);
+  else { light("lSat", "r", s.siv ? `${s.siv} sats` : "No fix"); hints.push("No satellite fix: the GPS antenna needs a clear view of the sky."); }
+  // 2. Corrections = XBee WiFi + RTK2go link
+  if (s.sim) light("lCor", "b", "SIM");
+  else if (!L) light("lCor", "", chars.links ? "…" : "update sketch");
+  else if (L.src === 3) light("lCor", "g", "via RTK");
+  else if (L.age === 255) { light("lCor", "r", "None yet"); hints.push("No corrections arriving. Check the phone hotspot, the XBee's WiFi, and that the RTK2go mountpoint is online."); }
+  else if (L.age <= 3) light("lCor", "g", L.age <= 1 ? "Live" : `${L.age} s ago`);
+  else if (L.age <= 10) light("lCor", "a", `${L.age} s ago`);
+  else { light("lCor", "r", L.age >= 254 ? "Lost" : `${L.age} s ago`);
+         hints.push(`No corrections for ${L.age >= 254 ? "4+ min" : L.age + " s"}. Check the phone hotspot, the XBee's WiFi, and that the RTK2go mountpoint is online.`); }
+  $("corrRate").textContent = L && L.bps !== 0xFFFF && !s.sim ? `corrections ${L.bps} B/s` : "";
+  // 3. RTK
+  if (s.sim) light("lRtk", "b", "SIM");
+  else if (s.carrier === 2) light("lRtk", "g", "FIX");
+  else if (s.carrier === 1) light("lRtk", "a", "FLOAT");
+  else light("lRtk", "r", "None");
+  const h = $("hint"); h.textContent = hints[0] || ""; h.classList.toggle("hide", !hints.length);
+}
+setInterval(() => { if (connected) renderLights(); }, 1000);   // catch a link that goes quiet
 
 function onPos(dv) {
   const lat = dv.getFloat64(0, true), lon = dv.getFloat64(8, true);

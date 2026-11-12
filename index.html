@@ -6,7 +6,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#f4f1ea">
 <title>TreePlanter</title>
-<!-- TreePlanter phone page v1.7c (2026-11-12) - diagnostics errors shown on screen -->
+<!-- TreePlanter phone page v1.8 (2026-11-12) - Map tab with satellite imagery -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   :root {
     --bg: #f4f1ea; --card: #ffffff; --ink: #14140f; --muted: #6b6a62; --line: #dcd7cc;
@@ -135,6 +137,20 @@
   .v-bad { background: var(--bad-bg); color: var(--bad); }
   .v-info { background: var(--info-bg); color: var(--info); }
 
+  /* map */
+  #mapWrap { position: relative; margin: 0 -16px; }
+  #map { height: calc(100dvh - 130px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); min-height: 320px; background: #e9e6dc; }
+  .mapbar { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 500; display: flex; gap: 6px; flex-wrap: wrap; pointer-events: none; }
+  .mapbar button { pointer-events: auto; border: 0; border-radius: 10px; padding: 9px 12px; font-weight: 800; font-size: 14px;
+    background: rgba(255,255,255,.95); color: var(--ink); box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+  .mapbar button.on { background: var(--accent); color: #fff; }
+  .mapinfo { position: absolute; left: 10px; right: 10px; bottom: 26px; z-index: 500; background: rgba(255,255,255,.95);
+    border-radius: 12px; padding: 8px 12px; font-size: 14px; font-weight: 700; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+  .mapmsg { position: absolute; top: 60px; left: 10px; right: 10px; z-index: 500; background: var(--warn-bg); color: var(--warn);
+    border-radius: 12px; padding: 10px 12px; font-weight: 700; font-size: 14px; }
+  .leaflet-container { font: inherit; }
+  .leaflet-control-attribution { font-size: 10px; line-height: 1.3; }
+
   /* bottom tabs */
   nav { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,.96); border-top: 1px solid var(--line);
     display: flex; justify-content: center; padding-bottom: env(safe-area-inset-bottom); z-index: 10; }
@@ -150,7 +166,7 @@
 <body>
 <div class="app">
   <header>
-    <h1>🌳 TreePlanter <span style="font-size:12px;color:var(--muted);font-weight:600">page v1.7c</span></h1>
+    <h1>🌳 TreePlanter <span style="font-size:12px;color:var(--muted);font-weight:600">page v1.8</span></h1>
     <span id="conn" class="conn">Not connected</span>
     <button id="btnConnect" class="btn small">Connect</button>
   </header>
@@ -199,6 +215,20 @@
       </div>
     </section>
 
+    <!-- ================= MAP ================= -->
+    <section id="v-map" class="view">
+      <div id="mapWrap">
+        <div id="map"></div>
+        <div class="mapbar">
+          <button id="mImg" class="on">Imagery</button>
+          <button id="mFollow" class="on">Follow</button>
+          <button id="mFit">All rows</button>
+        </div>
+        <div id="mapMsg" class="mapmsg hide"></div>
+        <div id="mapInfo" class="mapinfo">Connect to see rows and your position</div>
+      </div>
+    </section>
+
     <!-- ================= ROWS ================= -->
     <section id="v-rows" class="view">
       <div class="card">
@@ -223,7 +253,7 @@
     <section id="v-set" class="view">
       <h2>Diagnostics</h2>
       <div class="card">
-        <table class="dg"><tbody id="diagRows"><tr><td>Status</td><td>Page v1.7c - connect to see diagnostics</td></tr></tbody></table>
+        <table class="dg"><tbody id="diagRows"><tr><td>Status</td><td>Page v1.8 - connect to see diagnostics</td></tr></tbody></table>
         <div id="diagVerdicts"></div>
         <div style="display:flex;gap:10px;margin-top:12px">
           <button id="btnMosaicSetup" class="btn ghost hide" style="flex:1">Mosaic setup</button>
@@ -275,6 +305,7 @@
 
   <nav><div class="tabs">
     <button data-v="v-plant" class="on">Plant</button>
+    <button data-v="v-map">Map</button>
     <button data-v="v-rows">Rows</button>
     <button data-v="v-set">Settings</button>
   </div></nav>
@@ -287,7 +318,7 @@
 const U = n => `7a1e${n}-5b2c-4f6a-9d3e-0c1a2b3c4d5e`;
 const SVC = U("0000"), CH = {
   status: U("0001"), pos: U("0002"), settings: U("0003"), mask: U("0004"),
-  rowSel: U("0005"), rowInfo: U("0006"), rowName: U("0007"), cmd: U("0008"), links: U("0009"), diag: U("000a")
+  rowSel: U("0005"), rowInfo: U("0006"), rowName: U("0007"), cmd: U("0008"), links: U("0009"), diag: U("000a"), rowGeo: U("000b")
 };
 const FT_PER_MPH = 1.4667;
 
@@ -355,7 +386,7 @@ async function openGatt() {
   chars = {};
   for (const [k, uuid] of Object.entries(CH)) {
     try { chars[k] = await svc.getCharacteristic(uuid); }
-    catch (e) { if (k === "links" || k === "diag") chars[k] = null; else throw e; }   // newer sketches only
+    catch (e) { if (k === "links" || k === "diag" || k === "rowGeo") chars[k] = null; else throw e; }   // newer sketches only
   }
   q = Promise.resolve();
   settings = decodeSettings(await read(chars.settings));
@@ -401,12 +432,12 @@ async function keepAwake() {
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && connected) keepAwake(); });
 
 // ---------- rows ----------
-function cacheKey() { return "tp-rows-" + settings.hash + "-" + settings.numRows; }
+function cacheKey() { return "tp-rows2-" + settings.hash + "-" + settings.numRows; }
 
 async function loadRows() {
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem(cacheKey()) || "null"); } catch (e) {}
-  if (cached && cached.length === settings.numRows) { rows = cached; renderRows(); return; }
+  if (cached && cached.length === settings.numRows && (!chars.rowGeo || cached[0].lat1 !== undefined)) { rows = cached; renderRows(); drawRows(); return; }
   rows = [];
   $("rowsEmpty").textContent = "Loading rows…";
   $("rowsEmpty").classList.remove("hide");
@@ -416,12 +447,19 @@ async function loadRows() {
     await write(chars.rowSel, b);
     const info = await read(chars.rowInfo), name = await read(chars.rowName);
     const raw = new Uint8Array(name.buffer, name.byteOffset, name.byteLength).slice(); const z = raw.indexOf(0);
-    rows.push({ i, trees: info.getUint16(2, true), len: info.getUint16(4, true) / 10, brg: info.getUint16(6, true) / 10,
-                name: dec.decode(z >= 0 ? raw.slice(0, z) : raw) });
+    const r = { i, trees: info.getUint16(2, true), len: info.getUint16(4, true) / 10, brg: info.getUint16(6, true) / 10,
+                name: dec.decode(z >= 0 ? raw.slice(0, z) : raw) };
+    if (chars.rowGeo) {
+      const g = await read(chars.rowGeo);
+      r.lat1 = g.getFloat64(0, true); r.lon1 = g.getFloat64(8, true);
+      r.lat2 = g.getFloat64(16, true); r.lon2 = g.getFloat64(24, true); r.sp = g.getFloat32(32, true);
+    }
+    rows.push(r);
     if (i % 8 === 7) $("rowsEmpty").textContent = `Loading rows… ${i + 1} of ${settings.numRows}`;
   }
   try { localStorage.setItem(cacheKey(), JSON.stringify(rows)); } catch (e) {}
   renderRows();
+  drawRows();
 }
 
 const isOn = i => (i >> 3) >= mask.length ? true : !!(mask[i >> 3] & (1 << (i & 7)));
@@ -474,6 +512,7 @@ function renderCounts() {
 
 let maskTimer = null;
 function sendMask() {
+  styleRows();
   clearTimeout(maskTimer);
   maskTimer = setTimeout(() => { if (connected) write(chars.mask, mask.slice()).catch(e => console.warn(e)); }, 300);
 }
@@ -486,7 +525,8 @@ function onStatus(s) {
   $("spd").textContent = `${(s.speed / FT_PER_MPH).toFixed(1)} mph`;
 
   const r = rows[s.row];
-  if (s.row !== curRow) { curRow = s.row; if ($("v-rows").classList.contains("on")) renderRows(); }
+  if (s.row !== curRow) { curRow = s.row; if ($("v-rows").classList.contains("on")) renderRows(); styleRows(); }
+  mapStatus(s);
   $("rowname").textContent = s.onRow ? (r ? r.name : `Row #${s.row + 1}`) : "Looking for a row…";
   $("rowsub").textContent = s.onRow && r ? `Row ${s.row + 1} of ${rows.length} · ${r.len.toFixed(1)} ft · heading ${compass(r.brg)}` : " ";
 
@@ -629,8 +669,144 @@ async function pollDiag() {
   } finally { diagBusy = false; }
 }
 
+// ---------- map ----------
+const FPLAT = 364206.87, FPLON = 285248.9;           // same constants as the KML scripts and the Artemis
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+let map = null, imgLayer = null, rowLayer = null, spotLayer = null, posLayer = null;
+let rowLines = [], follow = true, imagery = true, fitted = false;
+let pos = null, prevPos = null, heading = null, spotRow = -2, lastStatus2 = null, spotsAt = 0;
+try { imagery = localStorage.getItem("tp-imagery") !== "off"; } catch (e) {}
+
+const PALETTE = ["#ffb300", "#4fc3f7", "#e040fb", "#ff5252", "#69f0ae", "#ff8a65", "#b388ff", "#eeff41"];
+const groupColor = {};
+function colorFor(r) { const g = groupOf(r); if (!(g in groupColor)) groupColor[g] = PALETTE[Object.keys(groupColor).length % PALETTE.length]; return groupColor[g]; }
+
+function mapMsg(t) { const e = $("mapMsg"); e.textContent = t || ""; e.classList.toggle("hide", !t); }
+
+function initMap() {
+  if (map) { map.invalidateSize(); return; }
+  if (!window.L) { mapMsg("The map library didn't load (no internet when the page opened). Reload the page with signal."); return; }
+  map = L.map("map", { zoomControl: false, preferCanvas: true, maxZoom: 22, attributionControl: true }).setView([38.7395, -95.179], 17);
+  map.attributionControl.setPrefix(false);
+  imgLayer = L.tileLayer(ESRI, { maxNativeZoom: 19, maxZoom: 22,
+    attribution: "&copy; Esri, Maxar" });
+  if (imagery) imgLayer.addTo(map);
+  rowLayer = L.layerGroup().addTo(map);
+  spotLayer = L.layerGroup().addTo(map);
+  posLayer = L.layerGroup().addTo(map);
+  map.on("dragstart", () => { follow = false; $("mFollow").classList.remove("on"); });
+  $("mImg").classList.toggle("on", imagery);
+  drawRows();
+  if (pos) mapPosition(pos.lat, pos.lon);
+}
+
+function drawRows() {
+  if (!map || !rowLayer) return;
+  rowLayer.clearLayers(); rowLines = [];
+  if (!rows.length) { $("mapInfo").textContent = connected ? "Loading rows..." : "Connect to see rows and your position"; return; }
+  if (rows[0].lat1 === undefined) { mapMsg("Row lines need planter sketch v1.8. Your position still shows."); return; }
+  mapMsg("");
+  const pts = [];
+  for (const r of rows) {
+    const ln = L.polyline([[r.lat1, r.lon1], [r.lat2, r.lon2]], { weight: 4 });
+    ln.bindPopup(() => `<b>${r.name.replace(/</g, "&lt;")}</b><br>#${r.i + 1} · ${r.trees} trees · ${r.len.toFixed(1)} ft<br>${isOn(r.i) ? "On" : "Off (skipped)"}`);
+    ln.addTo(rowLayer); rowLines[r.i] = ln;
+    pts.push([r.lat1, r.lon1], [r.lat2, r.lon2]);
+  }
+  styleRows();
+  if (!fitted && !pos) { map.fitBounds(pts, { padding: [30, 30] }); fitted = true; }
+  updateMapInfo();
+}
+
+function styleRows() {
+  if (!map) return;
+  for (const r of rows) {
+    const ln = rowLines[r.i]; if (!ln) continue;
+    if (r.i === curRow) ln.setStyle({ color: "#ffffff", weight: 7, opacity: 1, dashArray: null });
+    else if (!isOn(r.i)) ln.setStyle({ color: "#9e9e9e", weight: 3, opacity: .8, dashArray: "6 8" });
+    else ln.setStyle({ color: colorFor(r), weight: 4, opacity: .95, dashArray: null });
+    if (r.i === curRow) ln.bringToFront();
+  }
+}
+
+// tree spots of the current row, shown when zoomed in; filled = planter has passed it
+function drawSpots(s) {
+  if (!map) return;
+  const r = rows[curRow];
+  if (!r || r.lat1 === undefined || map.getZoom() < 19) { spotLayer.clearLayers(); spotRow = -2; return; }
+  const n = r.trees, sp = r.sp || 2.5;
+  const dx = (r.lon2 - r.lon1) * FPLON, dy = (r.lat2 - r.lat1) * FPLAT, L0 = Math.hypot(dx, dy) || 1;
+  const ux = dx / L0, uy = dy / L0, span = (n - 1) * sp;
+  const passedTo = s && s.dirKnown ? s.prog * span : -1;          // distance through the row in travel direction
+  if (spotRow !== curRow) {
+    spotLayer.clearLayers(); spotRow = curRow;
+    for (let k = 0; k < n; k++) {
+      const d = k * sp;
+      L.circleMarker([r.lat1 + uy * d / FPLAT, r.lon1 + ux * d / FPLON], { radius: 3, weight: 1, color: "#fff", fillOpacity: 1, fillColor: "#fff" }).addTo(spotLayer);
+    }
+  }
+  let k = 0;
+  spotLayer.eachLayer(m => {
+    const d = k * sp, along = s && s.fwd ? d : span - d;
+    m.setStyle({ fillColor: passedTo >= 0 && along <= passedTo + 0.01 ? "#1f7a3a" : "#ffffff" });
+    k++;
+  });
+}
+
+function mapStatus(s) {
+  lastStatus2 = s;
+  if (!map || !$("v-map").classList.contains("on")) return;
+  if (Date.now() - spotsAt > 500) { spotsAt = Date.now(); drawSpots(s); }
+  updateMapInfo();
+}
+
+function mapPosition(lat, lon) {
+  pos = { lat, lon };
+  if (prevPos) {                                    // heading from movement of at least 1 ft
+    const dx = (lon - prevPos.lon) * FPLON, dy = (lat - prevPos.lat) * FPLAT;
+    if (Math.hypot(dx, dy) >= 1) { heading = Math.atan2(dx, dy); prevPos = pos; }
+  } else prevPos = pos;
+  if (!map || !$("v-map").classList.contains("on")) return;
+  posLayer.clearLayers();
+  if (heading !== null) {
+    const off = settings ? settings.offset : 7.25, sx = Math.sin(heading), sy = Math.cos(heading);
+    const box = [lat - sy * off / FPLAT, lon - sx * off / FPLON];
+    const tip = [lat + sy * 6 / FPLAT, lon + sx * 6 / FPLON];
+    L.polyline([box, [lat, lon]], { color: "#ff6f00", weight: 3 }).addTo(posLayer);
+    L.polyline([[lat, lon], tip], { color: "#2962ff", weight: 4 }).addTo(posLayer);
+    L.circleMarker(box, { radius: 7, color: "#fff", weight: 2, fillColor: "#ff6f00", fillOpacity: 1 }).bindTooltip("Planter box").addTo(posLayer);
+  }
+  L.circleMarker([lat, lon], { radius: 9, color: "#fff", weight: 3, fillColor: "#2962ff", fillOpacity: 1 }).addTo(posLayer);
+  if (follow) map.setView([lat, lon], Math.max(map.getZoom(), 19), { animate: false });
+  updateMapInfo();
+}
+
+function updateMapInfo() {
+  const s = lastStatus2, r = s && s.onRow ? rows[s.row] : null;
+  let t = !connected ? "Not connected" : !pos ? "Waiting for a position fix..." : r ? `${r.name} · tree ${s.planted}/${s.total}` : "Not on a row";
+  if (s && !s.sim) t += s.carrier === 2 ? " · RTK FIX" : s.carrier === 1 ? " · FLOAT" : " · no RTK";
+  if (s && s.sim) t += " · SIM";
+  $("mapInfo").textContent = t;
+}
+
+$("mImg").addEventListener("click", () => {
+  imagery = !imagery; $("mImg").classList.toggle("on", imagery);
+  try { localStorage.setItem("tp-imagery", imagery ? "on" : "off"); } catch (e) {}
+  if (map) { if (imagery) imgLayer.addTo(map); else map.removeLayer(imgLayer); }
+});
+$("mFollow").addEventListener("click", () => {
+  follow = !follow; $("mFollow").classList.toggle("on", follow);
+  if (follow && map && pos) map.setView([pos.lat, pos.lon], Math.max(map.getZoom(), 19));
+});
+$("mFit").addEventListener("click", () => {
+  if (!map || !rows.length || rows[0].lat1 === undefined) return;
+  follow = false; $("mFollow").classList.remove("on");
+  map.fitBounds(rows.flatMap(r => [[r.lat1, r.lon1], [r.lat2, r.lon2]]), { padding: [30, 30] });
+});
+
 function onPos(dv) {
   const lat = dv.getFloat64(0, true), lon = dv.getFloat64(8, true);
+  if (lat) mapPosition(lat, lon);
   if (lat) $("pos").textContent = `${lat.toFixed(8)}, ${lon.toFixed(8)}`;
 }
 
@@ -698,6 +874,7 @@ function showView(id) {
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.v === id));
   if (id === "v-rows") renderRows();
   if (id === "v-set") { diagRetryAt = 0; pollDiag(); }
+  if (id === "v-map") { initMap(); setTimeout(() => { if (map) { map.invalidateSize(); if (pos) mapPosition(pos.lat, pos.lon); if (lastStatus2) drawSpots(lastStatus2); } }, 50); }
   window.scrollTo(0, 0);
 }
 document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => showView(b.dataset.v)));

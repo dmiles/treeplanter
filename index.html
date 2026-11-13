@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#f4f1ea">
 <title>TreePlanter</title>
-<!-- TreePlanter phone page v1.8 (2026-11-12) - Map tab with satellite imagery -->
+<!-- TreePlanter phone page v1.9 (2026-11-12) - tree number from position, row-hold diagnostics -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
@@ -166,7 +166,7 @@
 <body>
 <div class="app">
   <header>
-    <h1>🌳 TreePlanter <span style="font-size:12px;color:var(--muted);font-weight:600">page v1.8</span></h1>
+    <h1>🌳 TreePlanter <span style="font-size:12px;color:var(--muted);font-weight:600">page v1.9</span></h1>
     <span id="conn" class="conn">Not connected</span>
     <button id="btnConnect" class="btn small">Connect</button>
   </header>
@@ -253,7 +253,7 @@
     <section id="v-set" class="view">
       <h2>Diagnostics</h2>
       <div class="card">
-        <table class="dg"><tbody id="diagRows"><tr><td>Status</td><td>Page v1.8 - connect to see diagnostics</td></tr></tbody></table>
+        <table class="dg"><tbody id="diagRows"><tr><td>Status</td><td>Page v1.9 - connect to see diagnostics</td></tr></tbody></table>
         <div id="diagVerdicts"></div>
         <div style="display:flex;gap:10px;margin-top:12px">
           <button id="btnMosaicSetup" class="btn ghost hide" style="flex:1">Mosaic setup</button>
@@ -278,7 +278,7 @@
       <h2>This row</h2>
       <div class="card">
         <button id="restartRow" class="btn ghost" style="width:100%">Start this row over</button>
-        <p class="note">Clears the tree count and planted spots for the current row, e.g. after re-driving a section.</p>
+        <p class="note">Clears the remembered planted spots and miss count for the current row (or the last row driven), so the whole row flashes again. Other rows keep theirs.</p>
       </div>
 
       <h2>Bench test (no GPS)</h2>
@@ -355,7 +355,10 @@ function decodeDiag(dv) {
            dec: dv.getUint8(6), ggaRate: dv.getUint8(7), ggaAge: i16(8), station: i16(10), hAccMm: u16(12),
            bytesAcc: u32(14), msgAcc: u32(18), bytesRx: u32(22), msgRx: u32(26), cd: dv.getUint8(30),
            corrAge: dv.getUint8(31), bps: u16(32), badCs: u16(34), haveLink: !!dv.getUint8(36),
-           tmode: dv.getUint8(37), rtcmIn: dv.getUint8(38), baud: u32(40) };
+           tmode: dv.getUint8(37), rtcmIn: dv.getUint8(38), baud: u32(40),
+           // sketch v1.9+: row-hold stats
+           hold: dv.byteLength >= 56 ? { drops: u16(44), why: dv.getUint8(46), glitches: dv.getUint8(47),
+             off: i16(48) / 10, along: i16(50) / 10, resumes: u16(52), flashes: u16(54) } : null };
 }
 function decodeSettings(dv) {
   return { offset: dv.getUint16(0, true) / 100, flashMs: dv.getUint16(2, true), fixedOnly: !!dv.getUint8(4),
@@ -644,6 +647,13 @@ function renderDiag(d) {
     add("Correction input", d.rtcmIn === 1 ? "on" : d.rtcmIn === 0 ? "OFF" : "unknown");
     add("UART2 baud", d.baud ? d.baud.toLocaleString() : "unknown");
   }
+  if (d.hold) {
+    const h = d.hold, why = {1: "drifted off the line", 2: "past the row end", 3: "row turned off"}[h.why];
+    add("Row let go", h.drops ? `${h.drops}× · last: ${why || "?"}, ${Math.abs(h.off).toFixed(1)} ft off at ${h.along.toFixed(0)} ft along` : "never");
+    add("Rows picked back up", h.resumes ? `${h.resumes}× (planted trees remembered)` : "-");
+    add("Jumpy GPS readings ignored", h.glitches >= 255 ? "255+" : String(h.glitches));
+    add("Flashes this row", String(h.flashes));
+  } else add("Row hold", "update the planter to sketch v1.9 to see this");
   $("diagRows").innerHTML = rows.join("");
   $("diagVerdicts").innerHTML = diagVerdicts(d).map(([c, t]) => `<div class="verdict ${c}"></div>`).join("");
   const vs = diagVerdicts(d); document.querySelectorAll("#diagVerdicts .verdict").forEach((e, i) => e.textContent = vs[i][1]);
